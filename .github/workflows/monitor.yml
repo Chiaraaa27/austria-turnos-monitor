@@ -24,7 +24,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - run: python -m playwright install --with-deps chromium
+      - run: python -m playwright install chromium
 
       - run: python monitor.py
         env:
