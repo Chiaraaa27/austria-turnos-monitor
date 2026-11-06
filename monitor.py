@@ -1,126 +1,95 @@
-"""Read-only appointment availability checker. Never books appointments."""
+"""Read-only checker for Austrian Working Holiday appointments in Buenos Aires.
+
+Does not book appointments or bypass access controls. Fails closed on ambiguity.
+"""
 import os
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-import requests
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-URL = 'https://appointment.bmeia.gv.at/?Office=buenos-aires'
-OUT = Path('diagnostics')
+import requests
+from playwright.sync_api import sync_playwright
+
+URL = "https://appointment.bmeia.gv.at/?Office=buenos-aires"
+OUT = Path("diagnostics")
 OUT.mkdir(exist_ok=True)
 
 
 def save(page, name):
-    page.screenshot(path=str(OUT / f'{name}.png'), full_page=True)
-    (OUT / f'{name}.txt').write_text(page.locator('body').inner_text(timeout=15000), encoding='utf-8')
+    try:
+        page.screenshot(path=str(OUT / f"{name}.png"), full_page=True, timeout=5000)
+    except Exception as exc:
+        print(f"Screenshot unavailable: {exc}")
+    try:
+        (OUT / f"{name}.html").write_text(page.content(), encoding="utf-8")
+    except Exception as exc:
+        print(f"HTML unavailable: {exc}")
+    try:
+        (OUT / f"{name}.txt").write_text(page.locator("body").inner_text(timeout=5000), encoding="utf-8")
+    except Exception as exc:
+        print(f"Page text unavailable: {exc}")
 
 
 def choose_option(page, pattern):
-    """Select a matching visible option in a native select; fail closed otherwise."""
-    for select in page.locator('select').all():
+    matches = []
+    for select in page.locator("select").all():
         if not select.is_visible():
             continue
-        options = select.locator('option').all()
-        matches = [(o.get_attribute('value'), o.inner_text().strip()) for o in options
-                   if re.search(pattern, o.inner_text().strip(), re.I)]
-        if len(matches) == 1:
-            value, label = matches[0]
-            if value is None:
-                continue
-            select.select_option(value=value)
-            print(f'Selected option: {label}')
-            return True
-    return False
+        for option in select.locator("option").all():
+            label = option.inner_text().strip()
+            value = option.get_attribute("value")
+            if value is not None and re.search(pattern, label, re.I):
+                matches.append((select, value, label))
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected exactly one option matching {pattern!r}; found {len(matches)}")
+    select, value, label = matches[0]
+    select.select_option(value=value)
+    print(f"Selected: {label}")
 
 
 def next_button(page):
-    # Only click the known navigation button, never confirmation or booking buttons.
-    candidates = page.get_by_role('button', name=re.compile(r'^(Continuar|Next|Weiter)$', re.I))
-    if candidates.count() == 1:
-        candidates.click()
+    pattern = re.compile(r"^(Continuar|Next|Weiter)$", re.I)
+    buttons = page.get_by_role("button", name=pattern)
+    if buttons.count() == 1:
+        buttons.click(timeout=10000)
         return
-    candidates = page.get_by_text(re.compile(r'^(Continuar|Next|Weiter)$', re.I), exact=True)
-    if candidates.count() == 1:
-        candidates.click()
+    text = page.get_by_text(pattern, exact=True)
+    if text.count() == 1:
+        text.click(timeout=10000)
         return
-    raise RuntimeError('Cannot identify unique Continue button')
+    raise RuntimeError("Cannot identify a unique Continue button")
 
 
 def alert(message):
-    topic = os.environ.get('NTFY_TOPIC', '').strip()
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
     if not topic:
-        raise RuntimeError('NTFY_TOPIC GitHub secret is missing')
-    response = requests.post(f'https://ntfy.sh/{topic}', data=message.encode('utf-8'),
-                             headers={'Title': 'Austria Working Holiday: revisar turnos',
-                                      'Priority': 'high', 'Click': URL, 'Tags': 'calendar'}, timeout=20)
+        raise RuntimeError("NTFY_TOPIC secret missing")
+    response = requests.post(
+        f"https://ntfy.sh/{topic}",
+        data=message.encode("utf-8"),
+        headers={"Title": "Austria Working Holiday: revisar turnos", "Priority": "high", "Click": URL},
+        timeout=20,
+    )
     response.raise_for_status()
 
 
 def main():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        page = browser.new_page(locale='es-AR', timezone_id='America/Argentina/Buenos_Aires')
+        page = browser.new_page(locale="es-AR", timezone_id="America/Argentina/Buenos_Aires")
         try:
-            
-        try:
-            page.goto(
-                URL,
-                wait_until="domcontentloaded",
-                timeout=30000
-            )
-        except Exception as e:
-            from pathlib import Path
-
-            Path("diagnostics").mkdir(exist_ok=True)
-            print(f"ERROR DE NAVEGACIÓN: {e}")
-            print(f"URL ACTUAL: {page.url}")
-
             try:
-                page.screenshot(
-                    path="diagnostics/pantalla.png",
-                    full_page=True,
-                    timeout=5000
-                )
-                Path("diagnostics/pagina.html").write_text(
-                    page.content(),
-                    encoding="utf-8"
-                )
-                print("Diagnóstico guardado.")
-            except Exception as capture_error:
-                print(f"Error al guardar diagnóstico: {capture_error}")
-
-            raise
-            RuntimeError('Cannot verify category and party size on results page')
-            no_slots = bool(re.search(r'Actualmente no hay fechas disponibles|no appointments available|keine Termine verfügbar', text, re.I))
-            # A real slot must have a visible interactive time or date option; text changes alone are not enough.
-            slot_candidates = page.locator('a, button, input[type="radio"], input[type="submit"]')
-            slot_labels = []
-            for el in slot_candidates.all():
-                if not el.is_visible() or not el.is_enabled():
-                    continue
-                label = (el.inner_text() if el.evaluate('(e) => e.tagName.toLowerCase()') != 'input' else (el.get_attribute('value') or el.get_attribute('aria-label') or '')).strip()
-                if re.search(r'\b(?:[01]?\d|2[0-3]):[0-5]\d\b', label):
-                    slot_labels.append(label[:100])
-            if no_slots and not slot_labels:
-                print('NO_AVAILABILITY: no appointments shown on selected week')
-            elif slot_labels and not no_slots:
-                print('POSSIBLE_AVAILABILITY: ' + repr(slot_labels))
-                alert('Se detectaron horarios seleccionables para Working Holiday (1 persona): '
-                      + ', '.join(slot_labels[:5]) + '\nEntrá a verificar y reservar: ' + URL)
-            else:
-                print('UNKNOWN: page does not conclusively indicate availability; see diagnostics')
-        except (Exception, PlaywrightTimeout) as exc:
-            print(f'CHECK_FAILED: {exc}', file=sys.stderr)
-            try:
-                save(page, 'error')
+                page.goto(URL, wait_until="domcontentloaded", timeout=30000)
             except Exception:
-                pass
-            raise
-        finally:
-            browser.close()
+                print(f"Navigation failed. Current URL: {page.url}")
+                save(page, "navigation_error")
+                raise
 
+            save(page, "start")
+            choose_option(page, r"Working\s+Holiday\s+Programm")
+            next_button(page)
+            save(page, "after_category")
 
-if __name__ == '__main__':
-    main()
+            choose_option(page, r"^\s*(1|una?)\s*(Persona\(s\)|Personas?|Person\(s\)|Persons?)?\s*$")
+            next_button(page)
+            save(page, "results")
