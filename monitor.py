@@ -63,7 +63,7 @@ def main():
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page(locale='es-AR', timezone_id='America/Argentina/Buenos_Aires')
         try:
-            page.goto(URL, wait_until='domcontentloaded', timeout=45000)
+             try:     page.goto(URL, wait_until="domcontentloaded", timeout=30000) except Exception as e:     from pathlib import Path     Path("diagnostics").mkdir(exist_ok=True)     print(f"ERROR DE NAVEGACIÓN: {e}")     print(f"URL ACTUAL: {page.url}")     try:         page.screenshot(             path="diagnostics/pantalla.png",             full_page=True,             timeout=5000         )         Path("diagnostics/pagina.html").write_text(             page.content(), encoding="utf-8"         )         print("Diagnóstico guardado correctamente.")     except Exception as capture_error:         print(f"No se pudo guardar la captura: {capture_error}")     raise
             page.wait_for_timeout(1200)
             save(page, '01-start')
             if not choose_option(page, r'Working\s*Holiday\s*Programm'):
