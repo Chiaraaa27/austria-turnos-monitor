@@ -93,3 +93,43 @@ def main():
             choose_option(page, r"^\s*(1|una?)\s*(Persona\(s\)|Personas?|Person\(s\)|Persons?)?\s*$")
             next_button(page)
             save(page, "results")
+
+            text = page.locator("body").inner_text(timeout=10000)
+            if not re.search(r"Working\s+Holiday\s+Programm", text, re.I) or not re.search(
+                r"\b1\s*(?:Persona|Person)", text, re.I
+            ):
+                raise RuntimeError("Cannot verify category and party size on results page")
+
+            no_slots = bool(re.search(
+                r"Actualmente no hay fechas disponibles|no appointments available|keine Termine verf[üu]gbar",
+                text, re.I,
+            ))
+            labels = []
+            for element in page.locator('a, button, input[type="radio"], input[type="submit"]').all():
+                if not element.is_visible() or not element.is_enabled():
+                    continue
+                label = (element.get_attribute("value") or element.get_attribute("aria-label") or "") if element.evaluate(
+                    "el => el.tagName.toLowerCase() === 'input'"
+                ) else element.inner_text()
+                label = label.strip()
+                if re.search(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", label):
+                    labels.append(label[:100])
+
+            if no_slots and not labels:
+                print("NO_AVAILABILITY: no appointments on displayed week")
+            elif labels and not no_slots:
+                print("POSSIBLE_AVAILABILITY: " + repr(labels))
+                alert("Posibles horarios Working Holiday (1 persona): " + ", ".join(labels[:5]) + "\n" + URL)
+            else:
+                print("UNKNOWN: availability could not be verified; see diagnostics")
+                raise RuntimeError("Inconclusive availability result")
+        except Exception as exc:
+            print(f"CHECK_FAILED: {exc}", file=sys.stderr)
+            save(page, "error")
+            raise
+        finally:
+            browser.close()
+
+
+if __name__ == "__main__":
+    main()
