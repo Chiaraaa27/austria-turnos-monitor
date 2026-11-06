@@ -63,24 +63,36 @@ def main():
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page(locale='es-AR', timezone_id='America/Argentina/Buenos_Aires')
         try:
-             try:     page.goto(URL, wait_until="domcontentloaded", timeout=30000) except Exception as e:     from pathlib import Path     Path("diagnostics").mkdir(exist_ok=True)     print(f"ERROR DE NAVEGACIÓN: {e}")     print(f"URL ACTUAL: {page.url}")     try:         page.screenshot(             path="diagnostics/pantalla.png",             full_page=True,             timeout=5000         )         Path("diagnostics/pagina.html").write_text(             page.content(), encoding="utf-8"         )         print("Diagnóstico guardado correctamente.")     except Exception as capture_error:         print(f"No se pudo guardar la captura: {capture_error}")     raise
-            page.wait_for_timeout(1200)
-            save(page, '01-start')
-            if not choose_option(page, r'Working\s*Holiday\s*Programm'):
-                raise RuntimeError('Working Holiday category not found in native selects')
-            next_button(page)
-            page.wait_for_load_state('domcontentloaded', timeout=20000)
-            page.wait_for_timeout(800)
-            save(page, '02-people')
-            if not choose_option(page, r'^\s*1\s*(Persona|Person|Personas|Person\(s\))?\s*$'):
-                raise RuntimeError('1-person option not found in native selects')
-            next_button(page)
-            page.wait_for_load_state('domcontentloaded', timeout=20000)
-            page.wait_for_timeout(1200)
-            save(page, '03-availability')
-            text = page.locator('body').inner_text()
-            if not re.search(r'Working\s*Holiday\s*Programm', text, re.I) or not re.search(r'1\s*Persona', text, re.I):
-                raise RuntimeError('Cannot verify category and party size on results page')
+            
+        try:
+            page.goto(
+                URL,
+                wait_until="domcontentloaded",
+                timeout=30000
+            )
+        except Exception as e:
+            from pathlib import Path
+
+            Path("diagnostics").mkdir(exist_ok=True)
+            print(f"ERROR DE NAVEGACIÓN: {e}")
+            print(f"URL ACTUAL: {page.url}")
+
+            try:
+                page.screenshot(
+                    path="diagnostics/pantalla.png",
+                    full_page=True,
+                    timeout=5000
+                )
+                Path("diagnostics/pagina.html").write_text(
+                    page.content(),
+                    encoding="utf-8"
+                )
+                print("Diagnóstico guardado.")
+            except Exception as capture_error:
+                print(f"Error al guardar diagnóstico: {capture_error}")
+
+            raise
+            RuntimeError('Cannot verify category and party size on results page')
             no_slots = bool(re.search(r'Actualmente no hay fechas disponibles|no appointments available|keine Termine verfügbar', text, re.I))
             # A real slot must have a visible interactive time or date option; text changes alone are not enough.
             slot_candidates = page.locator('a, button, input[type="radio"], input[type="submit"]')
